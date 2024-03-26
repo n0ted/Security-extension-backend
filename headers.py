@@ -5,6 +5,10 @@ import socket
 import ssl
 import sys
 from urllib.parse import urlparse
+import whois
+import socket 
+import sys
+
 
 import utils
 from constants import DEFAULT_URL_SCHEME, EVAL_WARN
@@ -138,12 +142,65 @@ class SecurityHeaders():
         self.verify_ssl = False if no_check_certificate else True
         self.headers = None
         self.url = url
+        self.domain = self.extract_domain(url)
+        self.no_check_certificate = no_check_certificate
 
         if self.max_redirects:
             self.target_url = self._follow_redirect_until_response(url, self.max_redirects)
         else:
             self.target_url = parsed
+    def extract_domain(self, url):
+        return url.split("//")[-1].split("/")[0]
 
+    def get_whois_details(self):
+        try:
+            domain_info = whois.whois(self.domain)
+            return domain_info
+        except Exception as e:
+            return str(e)
+
+    def get_raw_headers(self):
+        # Fetch headers from the target site and store them into the class instance
+        conn = self.open_connection(self.target_url)
+        try:
+            conn.request('GET', self.target_url.path, headers=self.REQUEST_HEADERS)
+            res = conn.getresponse()
+            headers = res.getheaders()
+            self.headers = {x[0].lower(): x[1] for x in headers}
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ssl.SSLError) as e:
+            raise UnableToConnect("Connection failed {}".format(self.target_url.hostname)) from e
+
+    def analyze_security_headers(self):
+        try:
+            self.fetch_headers()
+            headers = self.check_headers()
+            whois_details = self.get_whois_details()
+
+        except SecurityHeadersException as e:
+            return {'error': str(e)}
+
+        result = {}
+
+        # Populate result dictionary with security headers analysis
+        result['security_headers'] = headers
+
+        # Add HTTPS support and certificate validity information
+        https = self.test_https()
+        result['https'] = {
+            'supported': https['supported'],
+            'certvalid': https['certvalid'],
+        }
+
+        # Add HTTP to HTTPS redirect information
+        result['http_to_https'] = self.test_http_to_https()
+
+        # Add WHOIS details
+        result['whois'] = whois_details
+
+        # Add DNS details
+
+
+        return result
     def test_https(self):
         conn = http.client.HTTPSConnection(self.hostname, context=ssl.create_default_context(),
                                            timeout=self.DEFAULT_TIMEOUT)
@@ -180,6 +237,7 @@ class SecurityHeaders():
                 raise UnableToConnect("Connection failed {}".format(temp_url.netloc)) from e
             except ssl.SSLError as e:
                 raise UnableToConnect("SSL Error") from e
+            
 
             if res.status >= 300 and res.status < 400:
                 headers = res.getheaders()
@@ -228,9 +286,20 @@ class SecurityHeaders():
             res = conn.getresponse()
         except (socket.gaierror, socket.timeout, ConnectionRefusedError, ssl.SSLError) as e:
             raise UnableToConnect("Connection failed {}".format(self.target_url.hostname)) from e
+        dns = socket.gethostbyname(self.target_url.hostname)
+        ip = socket.gethostbyname_ex(self.target_url.hostname)
+
+        # Retrieve raw headers
+        raw_headers = res.msg._headers
 
         headers = res.getheaders()
         self.headers = {x[0].lower(): x[1] for x in headers}
+
+        # Append DNS, IP, and raw headers to the headers dictionary
+        self.headers['dns'] = dns
+        self.headers['ip'] = ip  # Choosing the third element of the IP tuple, which contains all IP addresses
+        self.headers['raw_headers'] = raw_headers
+
 
     def check_headers(self):
         """ Default return array """
@@ -268,31 +337,31 @@ class SecurityHeaders():
                 }
 
         return retval
-    def analyze_security_headers(self):
-        try:
-            self.fetch_headers()
-            headers = self.check_headers()
-        except SecurityHeadersException as e:
-            return {'error': str(e)}
+    # def analyze_security_headers(self):
+    #     try:
+    #         self.fetch_headers()
+    #         headers = self.check_headers()
+    #     except SecurityHeadersException as e:
+    #         return {'error': str(e)}
 
-        result = {}
-        for header, value in headers.items():
-            result[header] = {
-                'defined': value['defined'],
-                'warn': value['warn'],
-                'contents': value['contents'],
-                'notes': value['notes'],
-            }
+    #     result = {}
+    #     for header, value in headers.items():
+    #         result[header] = {
+    #             'defined': value['defined'],
+    #             'warn': value['warn'],
+    #             'contents': value['contents'],
+    #             'notes': value['notes'],
+    #         }
 
-        https = self.test_https()
-        result['https'] = {
-            'supported': https['supported'],
-            'certvalid': https['certvalid'],
-        }
+    #     https = self.test_https()
+    #     result['https'] = {
+    #         'supported': https['supported'],
+    #         'certvalid': https['certvalid'],
+    #     }
 
-        result['http_to_https'] = self.test_http_to_https()
+    #     result['http_to_https'] = self.test_http_to_https()
 
-        return result
+    #     return result
 
 if __name__ == "__main__":
     # Remove the argparse section and replace it with user input
@@ -301,39 +370,59 @@ if __name__ == "__main__":
     no_check_certificate = False
 
     try:
-        header_check = SecurityHeaders(url, max_redirects, no_check_certificate)
-        header_check.fetch_headers()
-        headers = header_check.check_headers()
+        header_check = SecurityHeaders(url)
+        result = header_check.analyze_security_headers()
+        
+        security_headers = result['security_headers']
+        whois_details = result['whois']
+        # dns_details = result['dns']
+
+        # Print security headers
+        for header, value in security_headers.items():
+            if value['warn']:
+                if not value['defined']:
+                    utils.print_warning("Header '{}' is missing".format(header))
+                else:
+                    utils.print_warning("Header '{}' contains value '{}".format(header, value['contents']))
+                    for n in value['notes']:
+                        print(" * {}".format(n))
+            else:
+                if not value['defined']:
+                    utils.print_ok("Header '{}' is missing".format(header))
+                else:
+                    utils.print_ok("Header '{}' contains value".format(header))
+
+        # Print HTTPS support and certificate validity
+        https = result['https']
+        if https['supported']:
+            utils.print_ok("HTTPS supported")
+        else:
+            utils.print_warning("HTTPS supported")
+
+        if https['certvalid']:
+            utils.print_ok("HTTPS valid certificate")
+        else:
+            utils.print_warning("HTTPS valid certificate")
+
+        # Print HTTP to HTTPS redirect
+        if result['http_to_https']:
+            utils.print_ok("HTTP -> HTTPS redirect")
+        else:
+            utils.print_warning("HTTP -> HTTPS redirect")
+
+        # Print WHOIS details
+        print("WHOIS Details:")
+        print(whois_details)
+
+        # Print DNS details
+        print("IP: ", header_check.headers.get('ip'))
+
+        # Print raw headers
+        print("\nRaw Headers:")
+        raw_headers = header_check.headers.get('raw_headers', [])
+        for header in raw_headers:
+            print(header[0], ": ", header[1])
+
     except SecurityHeadersException as e:
         print(e)
         sys.exit(1)
-
-    for header, value in headers.items():
-        if value['warn']:
-            if not value['defined']:
-                utils.print_warning("Header '{}' is missing".format(header))
-            else:
-                utils.print_warning("Header '{}' contains value '{}".format(header, value['contents']))
-                for n in value['notes']:
-                    print(" * {}".format(n))
-        else:
-            if not value['defined']:
-                utils.print_ok("Header '{}' is missing".format(header))
-            else:
-                utils.print_ok("Header '{}' contains value".format(header))
-
-    https = header_check.test_https()
-    if https['supported']:
-        utils.print_ok("HTTPS supported")
-    else:
-        utils.print_warning("HTTPS supported")
-
-    if https['certvalid']:
-        utils.print_ok("HTTPS valid certificate")
-    else:
-        utils.print_warning("HTTPS valid certificate")
-
-    if header_check.test_http_to_https():
-        utils.print_ok("HTTP -> HTTPS redirect")
-    else:
-        utils.print_warning("HTTP -> HTTPS redirect")

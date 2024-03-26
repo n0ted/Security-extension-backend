@@ -4,14 +4,19 @@ from headers import SecurityHeaders# Ensure your_script.py contains the modified
 def analyze_security_headers(url, max_redirects=2, no_check_certificate=False):
     try:
         header_check = SecurityHeaders(url, max_redirects, no_check_certificate)
-        return header_check.analyze_security_headers()
+        result = header_check.analyze_security_headers()
+        result['ip'] = header_check.headers.get('ip')
+        result['raw_headers'] = dict(header_check.headers) 
+        return result
     except Exception as e:
         return {'error': str(e)}
 
 app = Flask(__name__)
 CORS(app, resources={r"/analyze*": {"origins": "http://localhost:3000"}})
 CORS(app)  # Enable CORS for cross-origin AJAX requests
-
+@app.route('/')
+def home():
+    return 'THIS IS THE BACKEND FOR YOUR CHROME EXTENSION AND ITS WORKING'
 @app.route('/analyze', methods=['POST'])
 def analyze_url():
     data = request.json
