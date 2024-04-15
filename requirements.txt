@@ -28,3 +28,4 @@ zope.interface==6.1
 zope.lifecycleevent==5.0
 zope.proxy==5.2
 whois
+python-whois
