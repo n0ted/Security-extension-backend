@@ -126,7 +126,7 @@ class SecurityHeaders():
         'x-aspnet-version',
     ]
 
-    def __init__(self, url, max_redirects=2, no_check_certificate=True):
+    def __init__(self, url, max_redirects=20, no_check_certificate=True):
         parsed = urlparse(url)
         if not parsed.scheme and not parsed.netloc:
             url = "{}://{}".format(DEFAULT_URL_SCHEME, url)
