@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from headers import SecurityHeaders# Ensure your_script.py contains the modified code above
-def analyze_security_headers(url, max_redirects=2, no_check_certificate=False):
+def analyze_security_headers(url, max_redirects=10, no_check_certificate=False):
     try:
         header_check = SecurityHeaders(url, max_redirects, no_check_certificate)
         result = header_check.analyze_security_headers()
